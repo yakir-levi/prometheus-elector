@@ -1,193 +1,249 @@
-## prometheus-elector
+# prometheus-elector
 
-`prometheus-elector` brings the ability of running a leader election between multiple [Prometheus](https://github.com/prometheus/prometheus) instances running in a Kubernetes cluster. It translates into the following features:
+## Acknowledgements
 
-- Election Aware Configuration: prometheus-elector makes sure that only one instance in a replicated prometheus workload has a certain configuration overrides. For instance, it allows to only enable remote write on the leader.
-- Election Aware Proxy: prometheus-elector can act as a reverse proxy that forwards all incoming HTTP requests to the leading instance. With that you can view your Prometheus cluster as a single instance.
+This project is a fork of [prometheus-elector](https://github.com/jlevesy/prometheus-elector) The original project was created by [Jean Levesy](https://github.com/jlevesy). 
+All credit for the original work goes to him.
 
-The goal with prometheus-elector is to provide an easy to use, low maintenance, active-passive setup for Prometheus on Kubernetes.
+## Changes Made
 
-What prometheus-elector is not:
+To ensure that Prometheus Elector works seamlessly in a Prometheus Operator environment,
+the following changes have been implemented to enhance functionality:
 
-- A "scalable" solution in term of time-series cardinality. With prometheus-elector you still have one Prometheus instance doing the job. Please look into other solutions (like [Mimir](https://github.com/grafana/mimir)) to achieve this.
-- A "zero-downtime" solution. When the leading instance goes down, you still have a short period of time (seconds) before another replica takes over the leadership.
-- A "portable" solution. It assumes running on Kubernetes, and relies on [Kubernetes leader election](https://kubernetes.io/blog/2016/01/simple-leader-election-with-kubernetes/).
-
-### Use Case: Active Passive Prometheus Agent Setup
-
-Prometheus (in agent mode) can be used to push metrics to a remote storage backend like [Mimir](https://grafana.com/oss/mimir/). While your storage backend might be highly available, you probably also want this property on the agent side as well.
-
-One approach of this problem is to have multiple agents pushing the same set of metrics to the storage backend. This requires to run some sort of metrics deduplication on the storage backend side to ensure correctness.
-
-Using `prometheus-elector`, we can instead make sure that only one Prometheus instance has `remote_write` enabled at any point of time and guarantee a reasonable delay (seconds) for another instance to take over when leading instance becomes unavailable. This brings the following advantages:
-
-- It minimizes (avoids?) data loss
-- It avoids running some expensive deduplication logic on the storage backend side
-- It is also much more efficient in term of resource usage (RAM and Network) because only one replica does the scrapping and pushing samples
-
-![illustration](./docs/assets/agent-diagram.svg)
-
-You can find the necessary configuration for this use case in the [example directory](./example/k8s/agent-values.yaml)
-
-#### Running an Example of this Setup
-
-You need [ko](https://github.com/ko-build/ko), `kubectl`, [k3d](https://github.com/k3d-io/k3d), `docker` and `helm` installed. You also need to make sure that `prometheus-elector-registry.localhost` resolves to `127.0.0.1` by adding an entry in your `/etc/hosts`.
-
-You can then run `make run_agent_example`.
-
-This command:
-
-- Creates a k3d cluster
-- Installs a storage backend Prometheus instance (in the `storage` namespace), configured to received metrics using the `remote_write` API.
-- Installs a statefulset running two replicas of `prometheus-elector` and `prometheus` in agent mode. Only one of them will push metrics at any point of time.
-
-### Use Case: Active Passive Prometheus
-
-One issue running multiple Prometheus instances in paralle is that their dataset slightly diverges, which makes loadbalancing requests accross multiple instances difficult from a metrics consumer perspective. You'll need a metrics aware reverse proxy like [promxy](https://github.com/jacksontj/promxy) that aggregates the two sources to achieve this properly.
-
-prometheus-elector takes a different approach and embeds a reverse proxy that forwards all received requests to the currently leading instance. While this solution doesn't provide load balancing, it allows, at minimal costs, to get consistent data independently of which replica is receiving the request initially.
-
-![illustration](./docs/assets/ha-diagram.svg)
-
-You can find the necessary configuration for this use case in the [example directory](./example/k8s/ha-values.yaml)
-
-#### Running an Example of this setup
+- Added a new flag `--leader-config`, which specifies the path to the Prometheus leader configuration file.
+- Implemented a mechanism to watch for any changes to the leader-config file, as well as the configuration file generated 
+by the Prometheus Operator. 
 
 
-You need [ko](https://github.com/ko-build/ko), `kubectl`, [k3d](https://github.com/k3d-io/k3d), `docker` and `helm` installed. You also need to make sure that `prometheus-elector-registry.localhost` resolves to `127.0.0.1` by adding an entry in your `/etc/hosts`.
 
-Then you can run `make run_proxy_example`.
+## Configuration Walkthrough: Integrating Prometheus Leader Election Sidecar into Your Deployment
 
-This command:
+Follow the steps below in order to integrate Prometheus Elector into your Prometheus deployment using the [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) Helm chart. 
+The examples provided are based on chart version 51.2.0.
 
-- Creates a k3d cluster
-- Installs a statefulset running two replicas of `prometheus-elector` and `prometheus`.
 
-From there you can port forward to one of the Prometheus pods (`k port-forward service/prometheus-elector-dev-leader 9095:80`) and start hitting the API through the port 9095 of the pod.
+Refer to the [example/k8s](example/k8s)  folder to find the Kubernetes manifest example and the Prometheus Helm values file, 
+which includes all the configurations needed to integrate Prometheus Elector or follow the steps below.
 
-### How it Works?
 
-It is implemented using a sidecar container that rewrites the configuration and injects `remote_write` rules in the configuration when elected leader. The setup is very similar to the usual [configmap-reloader](https://github.com/jimmidyson/configmap-reload) sidecar in Kubernetes deployment.
 
-The prometheus-elector container then run a [Kubernetes leader election](https://kubernetes.io/blog/2016/01/simple-leader-election-with-kubernetes/) and an API server.
-
-#### Election Aware Configuration
-
-prometheus-elector accepts a configuration composed by two major sections:
-
-- The `follower` section indicates the Prometheus configuration to apply in follower mode. This configuration is always applied.
-- The `leader` section indicates the changes to apply to the follower configuration when the instance is in elected leader. Please note that those changes gets "appended" to the follower configuration.
-
-Both those sections have the same model that the Prometheus configuration.
-
-When a replica is elected leader, prometheus-elector generates a new configuration file that carries the follower configuration merged with the override values provided under the `leader` section. And then tells Prometheus to reload its configuration using its lifecycle management API. If the replica is follower, only the follower section is generated, without the `leader` overrides.
-
-Here's an example that enables a `remote_write` target only when leader.
+**Step 1:** Create a Kubernetes Secret for Remote Write Configuration
+Begin by creating a Kubernetes Secret that will hold the remote write configuration for the leader.
 
 ```yaml
-# configuration applied when the instance is only follower.
-follower:
-  scrape_configs:
-  - job_name:       'some job'
-    scrape_interval: 5s
-    static_configs:
-    - targets: ['localhost:8080']
-
-# overrides to the follower configuration applied when the instance is leader.
-leader:
-  remote_writes:
-    - url: http://remote.write.com
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prometheus-leader-config-secret
+  namespace: infra
+type: Opaque
+stringData:
+  leader.yaml: |-
+    remote_write:
+      - url: https://your-remote-write-endpoint.com
+        remote_timeout: 120s
+        name: coralogix
+        tls_config:
+          insecure_skip_verify: true
+        authorization:
+          type: Bearer
+          credentials: credentials
+        follow_redirects: true
+        enable_http2: true
+        queue_config:
+          capacity: 10000
+          max_shards: 50
+          min_shards: 1
+          max_samples_per_send: 2000
+          batch_send_deadline: 5s
+          min_backoff: 30ms
+          max_backoff: 5s
+        metadata_config:
+          send: true
+          send_interval: 1m
+          max_samples_per_send: 2000
 ```
 
-#### Election Aware Proxy
+**Step 2:** Mount the Secret in Prometheus Pods
+To mount the Secret in the Prometheus pods, add it to the volumes section under prometheusSpec in the kube-prometheus-stack Helm values file:
 
-prometheus-elector can expose a reverse proxy that forwards all the received calls to the leading instance.
-
-As it is implemented, it relies on a few assumptions:
-
-- The `member_id` of the replica is the `pod` name.
-- The `<pod_name>.<service_name>` domain name is resolvable via DNS. This is a property of statfulsets in Kubernetes, but it requires the cluster to have DNS support enabled.
-
-#### Monitoring the Local Prometheus
-
-    prometheus-elector also continuously monitors its local Prometheus instance to optimize its participation to the elader election to minimize downtime:
-
-- When starting, it waits for the local prometheus instance to be ready before taking part to the election
-- It automatically leaves the election if the local Prometheus instance is not considered healthy.It then joins back as soon as the local instance goes back to an healthy state.
-
-### Installing Prometheus Elector
-
-You can find [an helm chart](./helm) in this repository, as well as [values for the HA agent example](./example/k8s/agent-values.yaml).
-
-### API Reference
-
-If the leader proxy is enabled, all HTTP calls received on the port 9095 are forwarded to the leader instance on port 9090 by default.
-
-`prometheus-elector` also exposes a few endpoints as well:
-
-- `/_elector/healthz`: healthcheck endpoint
-- `/_elector/leader`: returns information about the state of the election.
-- `/_elector/metrics`: Prometheus metrics endpoint.
-
-### Configuration Reference
-
+```yaml
+volumes:
+  - name: leader-volume-secret
+    secret:
+      secretName: prometheus-leader-config-secret
 ```
-  -api-listen-address string
-        HTTP listen address for the API. (default ":9095")
-  -api-proxy-enabled
-        Turn on leader proxy on the API
-  -api-proxy-prometheus-local-port uint
-        Listening port of the local prometheus instance (default 9090)
-  -api-proxy-prometheus-remote-port uint
-        Listening port of any remote prometheus instance (default 9090)
-  -api-proxy-prometheus-service-name string
-        Name of the statefulset headless service
-  -api-shutdown-grace-delay duration
-        Grace delay to apply when shutting down the API server (default 15s)
-  -config string
-        Path of the prometheus-elector configuration
-  -healthcheck-failure-threshold int
-        Amount of consecutives failures to consider Prometheus unhealthy (default 3)
-  -healthcheck-http-url string
-        URL to the Prometheus health endpoint
-  -healthcheck-period duration
-        Healthcheck period (default 5s)
-  -healthcheck-success-threshold int
-        Amount of consecutives success to consider Prometheus healthy (default 3)
-  -healthcheck-timeout duration
-        HTTP timeout for healthchecks (default 2s)
-  -init
-        Only init the prometheus config file
-  -kubeconfig string
-        Path to a kubeconfig. Only required if out-of-cluster.
-  -lease-duration duration
-        Duration of a lease, client wait the full duration of a lease before trying to take it over (default 15s)
-  -lease-name string
-        Name of lease resource
-  -lease-namespace string
-        Name of lease resource namespace
-  -lease-renew-deadline duration
-        Maximum duration spent trying to renew the lease (default 10s)
-  -lease-retry-period duration
-        Delay between two attempts of taking/renewing the lease (default 2s)
-  -notify-http-method string
-        HTTP method to use when sending the reload config request (default "POST")
-  -notify-http-url string
-        URL to the reload configuration endpoint
-  -notify-retry-delay duration
-        Delay between two notify retries. (default 10s)
-  -notify-retry-max-attempts int
-        How many retries for configuration update (default 5)
-  -notify-timeout duration
-        HTTP timeout for notify retries. (default 2s)
-  -output string
-        Path to write the Prometheus configuration
-  -readiness-http-url string
-        URL to the Prometheus ready endpoint
-  -readiness-poll-period duration
-        Poll period prometheus readiness check (default 5s)
-  -readiness-timeout duration
-        HTTP timeout for readiness calls (default 2s)
-  -runtime-metrics
-        Export go runtime metrics
+
+Step 3: Create a Role and RoleBinding
+Next, create a Kubernetes Role and RoleBinding to grant Prometheus permission to access lease resources. In this setup, the ServiceAccount for Prometheus is prometheus-elector-prometheus.
+
+```yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-elector-role
+  namespace: infra
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-elector-rolebinding
+  namespace: infra
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus-elector-role
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-elector-prometheus
+    namespace: infra
+  - kind: ServiceAccount
+    name: prometheus-operator-prometheus
+    namespace: infra
 ```
+
+**Step 4:** Configure Additional ServiceMonitor
+To scrape metrics from the Prometheus Elector container, add the following configuration under the prometheusSpec section of the Helm values file:
+
+```yaml
+additionalServiceMonitors:
+  - name: "prometheus-elector"
+    endpoints:
+      - path: /_elector/metrics
+        port: http-elector
+    namespaceSelector:
+      matchNames:
+        - infra
+    selector:
+      matchLabels:
+        app: kube-prometheus-stack-prometheus
+        release: prometheus-operator-elector
+        self-monitor: "true"
+```
+
+**Step 5:** Add Additional Port for Prometheus Service
+To expose the leader elector metrics, configure an additional port under the Prometheus service section of the Helm values file:
+
+```yaml
+additionalPorts:
+  - name: http-elector
+    port: 9095
+    targetPort: http-elector
+```
+**Step 6:** Add the Prometheus Elector Sidecar Container
+Integrate the Prometheus Elector container as a sidecar by adding it under the containers section of the prometheusSpec in the Helm values file:
+```yaml
+containers:
+  - name: prometheus-elector
+    image: yakirlevi/prometheus-elector:1.0.0
+    imagePullPolicy: Always
+    args:
+      - -lease-name=prometheus-elector-lease-remote
+      - -leader-config=/etc/config_leader/leader.yaml
+      - -lease-namespace=infra
+      - -config=/etc/prometheus/config_out/prometheus_config.yaml
+      - -output=/etc/prometheus/config_out/prometheus.env.yaml
+      - -notify-http-url=http://127.0.0.1:9090/-/reload
+      - -readiness-http-url=http://127.0.0.1:9090/-/ready
+      - -healthcheck-http-url=http://127.0.0.1:9090/-/healthy
+      - -api-listen-address=:9095
+    command:
+      - ./elector-cmd
+    ports:
+      - name: http-elector
+        containerPort: 9095
+        protocol: TCP
+    securityContext:
+      capabilities:
+        drop: [ "ALL" ]
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+    volumeMounts:
+      - mountPath: /etc/prometheus/config_out
+        name: config-out
+      - mountPath: /etc/config_leader
+        name: leader-volume-secret
+      - mountPath: /etc/pro
+```
+
+**Step 7:** Add Prometheus Elector Init Container
+Add the Prometheus Elector as an init container in the Helm values file under the initContainers section of prometheusSpec. The init container is necessary to generate the configuration file for the Prometheus container before it starts. Without this step, Prometheus would fail at startup because it wouldn't be able to find the required configuration file.
+```yaml
+initContainers:
+  - name: init-prometheus-elector
+    image: yakirlevi/prometheus-elector:1.0.0
+    imagePullPolicy: Always
+    args:
+      - -config=/etc/prometheus/config_out/prometheus_config.yaml
+      - -output=/etc/prometheus/config_out/prometheus.env.yaml
+      - -leader-config=/etc/config_leader/leader.yaml
+      - -init
+    command:
+      - ./elector-cmd
+    securityContext:
+      capabilities:
+        drop: [ "ALL" ]
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+    volumeMounts:
+      - mountPath: /etc/prometheus/config_out
+        name: config-out
+      - mountPath: /etc/config_leader
+        name: leader-volume-secret
+      - mountPath: /etc/prometheus/config
+        name: config
+```
+
+**Step 8:** Override Config Reloader
+Due to the limitation in overriding the Prometheus configuration file using a simple flag in the Helm values file, we implemented a solution to modify the output config file parameter utilized by the config-reloader. This enables us to pass the updated configuration to the Prometheus Elector.
+To retrieve the current configuration settings for the config-reloader and init-config-reloader in your setup, extract the complete YAML configuration of the StatefulSet (STS) created by the Prometheus Operator. You can do this using the following command:
+
+```base
+kubectl get sts <statefulset-name> -n <namespace> -o yaml
+```
+
+This command will display the complete configuration of the StatefulSet resource. In the output, look for the init-config-reloader and config-reloader arguments.
+Copy the args configuration for init-config-reloader to the initContainers section, and the settings for config-reloader to the containers section.
+Here's an example of what the configuration might look like:
+
+```yaml
+containers:
+  - name: config-reloader
+    args:
+      - --listen-address=:8080
+      - --reload-url=http://127.0.0.1:9090/-/reload
+      - --config-file=/etc/prometheus/config/prometheus.yaml.gz
+      - --config-envsubst-file=/etc/prometheus/config_out/prometheus_config.yaml
+      - --watched-dir=/etc/prometheus/rules/prometheus-prometheus-elector-prometheus-rulefiles-0
+      - --log-format=json
+
+initContainers:
+  - name: init-config-reloader
+    args:
+      - --watch-interval=0
+      - --listen-address=:8080
+      - --config-file=/etc/prometheus/config/prometheus.yaml.gz
+      - --config-envsubst-file=/etc/prometheus/config_out/prometheus_config.yaml
+      - --watched-dir=/etc/prometheus/rules/prometheus-prometheus-elector-prometheus-rulefiles-0
+      - --log-format=json
+```
+
+**Step 9:** Deploy and Verify
+At this point, all configurations are ready, and you can deploy the updated Helm values file along with all the Kubernetes manifest resources.
+To verify that everything is functioning correctly, connect to your Kubernetes cluster and check that the Prometheus pod includes all the necessary containers.
+
