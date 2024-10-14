@@ -21,12 +21,14 @@ by the Prometheus Operator.
 Follow the steps below in order to integrate Prometheus Elector into your Prometheus deployment using the [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) Helm chart. 
 The examples provided are based on chart version 51.2.0.
 
-Step 1: Create a Kubernetes Secret for Remote Write Configuration
-Begin by creating a Kubernetes Secret that will hold the remote write configuration for the leader.
 
 Refer to the [example/k8s](example/k8s)  folder to find the Kubernetes manifest example and the Prometheus Helm values file, 
-which includes all the configurations needed to integrate Prometheus Elector.
+which includes all the configurations needed to integrate Prometheus Elector or follow the steps below.
 
+
+
+Step 1: Create a Kubernetes Secret for Remote Write Configuration
+Begin by creating a Kubernetes Secret that will hold the remote write configuration for the leader.
 
 ```yaml
 ---
