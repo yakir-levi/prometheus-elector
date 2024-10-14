@@ -10,7 +10,7 @@ All credit for the original work goes to him.
 To ensure that Prometheus Elector works seamlessly in a Prometheus Operator environment,
 the following changes have been implemented to enhance functionality:
 
-- Added a new flag --leader-config, which specifies the path to the Prometheus leader configuration file.
+- Added a new flag `--leader-config`, which specifies the path to the Prometheus leader configuration file.
 - Implemented a mechanism to watch for any changes to the leader-config file, as well as the configuration file generated 
 by the Prometheus Operator. 
 
@@ -23,6 +23,9 @@ The examples provided are based on chart version 51.2.0.
 
 Step 1: Create a Kubernetes Secret for Remote Write Configuration
 Begin by creating a Kubernetes Secret that will hold the remote write configuration for the leader.
+
+Refer to the [example/k8s](example/k8s)  folder to find the Kubernetes manifest example and the Prometheus Helm values file, 
+which includes all the configurations needed to integrate Prometheus Elector.
 
 
 ```yaml
