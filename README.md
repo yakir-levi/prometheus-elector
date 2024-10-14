@@ -27,7 +27,7 @@ which includes all the configurations needed to integrate Prometheus Elector or 
 
 
 
-Step 1: Create a Kubernetes Secret for Remote Write Configuration
+**Step 1:** Create a Kubernetes Secret for Remote Write Configuration
 Begin by creating a Kubernetes Secret that will hold the remote write configuration for the leader.
 
 ```yaml
@@ -65,7 +65,7 @@ stringData:
           max_samples_per_send: 2000
 ```
 
-Step 2: Mount the Secret in Prometheus Pods
+**Step 2:** Mount the Secret in Prometheus Pods
 To mount the Secret in the Prometheus pods, add it to the volumes section under prometheusSpec in the kube-prometheus-stack Helm values file:
 
 ```yaml
@@ -115,7 +115,7 @@ subjects:
     namespace: infra
 ```
 
-Step 4: Configure Additional ServiceMonitor
+**Step 4:** Configure Additional ServiceMonitor
 To scrape metrics from the Prometheus Elector container, add the following configuration under the prometheusSpec section of the Helm values file:
 
 ```yaml
@@ -134,7 +134,7 @@ additionalServiceMonitors:
         self-monitor: "true"
 ```
 
-Step 5: Add Additional Port for Prometheus Service
+**Step 5:** Add Additional Port for Prometheus Service
 To expose the leader elector metrics, configure an additional port under the Prometheus service section of the Helm values file:
 
 ```yaml
@@ -143,7 +143,7 @@ additionalPorts:
     port: 9095
     targetPort: http-elector
 ```
-Step 6: Add the Prometheus Elector Sidecar Container
+**Step 6:** Add the Prometheus Elector Sidecar Container
 Integrate the Prometheus Elector container as a sidecar by adding it under the containers section of the prometheusSpec in the Helm values file:
 ```yaml
 containers:
@@ -180,7 +180,7 @@ containers:
       - mountPath: /etc/pro
 ```
 
-Step 7: Add Prometheus Elector Init Container
+**Step 7:** Add Prometheus Elector Init Container
 Add the Prometheus Elector as an init container in the Helm values file under the initContainers section of prometheusSpec. The init container is necessary to generate the configuration file for the Prometheus container before it starts. Without this step, Prometheus would fail at startup because it wouldn't be able to find the required configuration file.
 ```yaml
 initContainers:
@@ -209,7 +209,7 @@ initContainers:
         name: config
 ```
 
-Step 8: Override Config Reloader
+**Step 8:** Override Config Reloader
 Due to the limitation in overriding the Prometheus configuration file using a simple flag in the Helm values file, we implemented a solution to modify the output config file parameter utilized by the config-reloader. This enables us to pass the updated configuration to the Prometheus Elector.
 To retrieve the current configuration settings for the config-reloader and init-config-reloader in your setup, extract the complete YAML configuration of the StatefulSet (STS) created by the Prometheus Operator. You can do this using the following command:
 
@@ -243,7 +243,7 @@ initContainers:
       - --log-format=json
 ```
 
-Step 9: Deploy and Verify
+**Step 9:** Deploy and Verify
 At this point, all configurations are ready, and you can deploy the updated Helm values file along with all the Kubernetes manifest resources.
-To verify that everything is functioning correctly, connect to your Kubernetes cluster and check that the Prometheus pod includes all the necessary containers, as shown in the example below:
+To verify that everything is functioning correctly, connect to your Kubernetes cluster and check that the Prometheus pod includes all the necessary containers.
 
